@@ -1,0 +1,7 @@
+__pycache__/
+*.pt
+*.avi
+*.pkl
+output_live/
+venv/
+input_videos/SAGA VS ASIS.mp4

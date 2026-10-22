@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Courtside Live</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --line: #2a3240;
+    --text: #e6edf3;
+    --muted: #8b96a5;
+    --accent: #ff7a1a;
+    --team1: #f59e0b;
+    --team2: #38bdf8;
+    --none: #3a4352;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --radius: 12px;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f5f7; --panel: #ffffff; --panel-2: #f0f2f5; --line: #dde1e7;
+      --text: #1b1f24; --muted: #5f6b7a; --none: #cfd5dd;
+      --team1: #d97706; --team2: #0284c7;
+      color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .2px; display: flex; align-items: center; gap: 10px; }
+  h1 .ball { width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+    box-shadow: inset -4px -3px 0 rgba(0,0,0,.25); }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line); font-weight: 600; font-size: 13px; white-space: nowrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .pill.running .dot { background: var(--bad); animation: pulse 1.4s infinite; }
+  .pill.busy .dot { background: var(--warn); }
+  .pill.done .dot { background: var(--good); }
+  .pill.error .dot { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  form { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: end; }
+  .teams { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 600; }
+  label .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); font: inherit; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { padding: 10px 18px; border-radius: 8px; border: 0; font: inherit; font-weight: 700; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #start { background: var(--accent); color: #fff; }
+  #stop { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .hint { grid-column: 1 / -1; color: var(--muted); font-size: 12px; margin: 0; }
+
+  .banner { margin-top: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px;
+    border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+    background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .banner.error { border-color: color-mix(in srgb, var(--bad) 50%, transparent);
+    background: color-mix(in srgb, var(--bad) 12%, transparent); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; margin-top: 16px; }
+  .video { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--line); display: grid; place-items: center; }
+  .video img { width: 100%; height: 100%; object-fit: contain; display: none; }
+  .video .placeholder { color: #8b96a5; text-align: center; padding: 20px; }
+  .title { margin: 12px 2px 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
+  .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .metric .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 700; }
+  .metric .v { font-size: 18px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  aside { display: flex; flex-direction: column; gap: 16px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 12px; }
+  .teamhead { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .teamhead div { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .teamhead .t1 { color: var(--team1); }
+  .teamhead .t2 { color: var(--team2); text-align: right; }
+  .teamhead .vs { color: var(--muted); font-size: 12px; }
+  .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--none); }
+  .bar span { transition: width .4s; }
+  .bar .b1 { background: var(--team1); }
+  .bar .b0 { background: var(--none); }
+  .bar .b2 { background: var(--team2); }
+  .barlabels { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 6px;
+    font-variant-numeric: tabular-nums; }
+  .row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+  .row .a, .row .b { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .row .a { color: var(--team1); }
+  .row .b { color: var(--team2); text-align: right; }
+  .row .label { color: var(--muted); font-size: 12px; font-weight: 600; text-align: center; }
+  .holder { margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .holder b { color: var(--text); }
+
+  .events { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; }
+  .events li { display: grid; grid-template-columns: 52px 1fr; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .events li:first-child { border-top: 0; }
+  .events li.empty { display: block; }
+  .events time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 5px; font-size: 11px; font-weight: 700; margin-right: 6px; color: #111; }
+  .tag.t1 { background: var(--team1); }
+  .tag.t2 { background: var(--team2); }
+  .empty { color: var(--muted); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; font-weight: 700; padding-bottom: 6px; }
+  td { padding: 6px 0; border-top: 1px solid var(--line); }
+  th:not(:first-child), td:not(:first-child) { text-align: right; }
+  .chip { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--none); }
+  .chip.t1 { background: var(--team1); }
+  .chip.t2 { background: var(--team2); }
+
+  .downloads { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; color: var(--muted); font-size: 13px; }
+  .downloads a { color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 5px 10px;
+    border-radius: 7px; text-decoration: none; font-weight: 600; }
+  .downloads a:hover { border-color: var(--accent); }
+  .downloads code { font-size: 12px; }
+
+  @media (max-width: 960px) {
+    main { grid-template-columns: 1fr; }
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 600px) {
+    form { grid-template-columns: 1fr 1fr; }
+    form .url { grid-column: 1 / -1; }
+    .teams { grid-template-columns: 1fr; }
+    header { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="ball"></span>Courtside Live</h1>
+    <span id="status" class="pill"><span class="dot"></span><span id="statusText">Ready</span></span>
+  </header>
+
+  <section class="card">
+    <form id="form">
+      <div class="url">
+        <label for="url">YouTube link</label>
+        <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" required>
+      </div>
+      <button id="start" type="submit">Start</button>
+      <button id="stop" type="button" disabled>Stop</button>
+      <div class="teams">
+        <div>
+          <label for="team1"><span class="swatch" style="background:var(--team1)"></span>Team 1 jersey</label>
+          <input id="team1" type="text" value="white shirt">
+        </div>
+        <div>
+          <label for="team2"><span class="swatch" style="background:var(--team2)"></span>Team 2 jersey</label>
+          <input id="team2" type="text" value="dark blue shirt">
+        </div>
+      </div>
+      <p class="hint">Describe each team's jersey in a few words (e.g. "red shirt", "yellow jersey"); players are sorted into teams by these descriptions. Live streams and normal videos both work.</p>
+    </form>
+    <div id="banner" class="banner" hidden></div>
+  </section>
+
+  <main>
+    <section>
+      <div class="video">
+        <img id="feed" alt="Annotated video">
+        <div id="placeholder" class="placeholder">Paste a YouTube link and press Start.</div>
+      </div>
+      <div id="title" class="title"></div>
+      <div class="metrics">
+        <div class="metric"><div class="k">Watched for</div><div class="v" id="mClock">–</div></div>
+        <div class="metric"><div class="k">Analysis speed</div><div class="v" id="mSpeed">–</div></div>
+        <div class="metric"><div class="k">Behind stream</div><div class="v" id="mLag">–</div></div>
+        <div class="metric"><div class="k">Frames analyzed</div><div class="v" id="mFrames">–</div></div>
+      </div>
+    </section>
+
+    <aside>
+      <section class="card">
+        <div class="teamhead">
+          <div class="t1" id="name1">Team 1</div><span class="vs">vs</span><div class="t2" id="name2">Team 2</div>
+        </div>
+        <h2>Ball control</h2>
+        <div class="bar"><span class="b1" id="bar1" style="width:0"></span><span class="b0" id="bar0" style="width:100%"></span><span class="b2" id="bar2" style="width:0"></span></div>
+        <div class="barlabels"><span id="pct1">0%</span><span id="pct0">no control 100%</span><span id="pct2">0%</span></div>
+        <div style="margin-top:12px">
+          <div class="row"><span class="a" id="pass1">0</span><span class="label">Passes</span><span class="b" id="pass2">0</span></div>
+          <div class="row"><span class="a" id="int1">0</span><span class="label">Interceptions</span><span class="b" id="int2">0</span></div>
+          <div class="row"><span class="a" id="dist1">0</span><span class="label">Distance (m)</span><span class="b" id="dist2">0</span></div>
+        </div>
+        <div class="holder" id="holder">Ball: –</div>
+      </section>
+
+      <section class="card">
+        <h2>Events</h2>
+        <ul class="events" id="events"><li class="empty">Passes and interceptions show up here.</li></ul>
+      </section>
+
+      <section class="card">
+        <h2>Players on court</h2>
+        <table>
+          <thead><tr><th>Player</th><th>Distance</th><th>Speed</th></tr></thead>
+          <tbody id="players"><tr><td class="empty" colspan="3">–</td></tr></tbody>
+        </table>
+      </section>
+    </aside>
+  </main>
+
+  <div class="downloads" id="downloads" hidden>
+    Recording to <code id="outdir"></code>
+    <a href="/api/download/events.csv">events.csv</a>
+    <a href="/api/download/timeline.csv">timeline.csv</a>
+    <a href="/api/download/summary.json">summary.json</a>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const ACTIVE = new Set(["starting", "loading", "connecting", "running", "stopping"]);
+const LABELS = {
+  idle: "Ready", starting: "Starting", loading: "Loading models", connecting: "Connecting",
+  running: "Analyzing", stopping: "Stopping", stopped: "Stopped", finished: "Stream ended", error: "Error",
+};
+const SLOW_FPS = 5;
+let feedSession = null;
+let formFilled = false;
+
+function fmtTime(seconds) {
+  if (seconds == null) return "–";
+  seconds = Math.floor(seconds);
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
+  const mm = h ? String(m).padStart(2, "0") : String(m);
+  return (h ? h + ":" : "") + mm + ":" + String(s).padStart(2, "0");
+}
+
+function teamName(state, team) {
+  const names = state.team_names || {};
+  return names[team] || ("Team " + team);
+}
+
+function render(state) {
+  const status = state.status;
+  const active = ACTIVE.has(status);
+  // After a page reload, show what the current session is analyzing
+  if (!formFilled && state.source) {
+    $("url").value = state.source;
+    $("team1").value = teamName(state, 1);
+    $("team2").value = teamName(state, 2);
+  }
+  formFilled = true;
+  const pill = $("status");
+  pill.className = "pill " + (status === "running" ? "running" : active ? "busy" : status === "error" ? "error" : status === "idle" ? "" : "done");
+  let label = LABELS[status] || status;
+  if (status === "running" && state.is_live) label = "Live · Analyzing";
+  if (status === "idle" && state.models === "loading") label = "Loading models";
+  $("statusText").textContent = label;
+
+  $("start").disabled = status === "stopping";
+  $("stop").disabled = !active || status === "stopping";
+
+  $("name1").textContent = "Team 1 · " + teamName(state, 1);
+  $("name2").textContent = "Team 2 · " + teamName(state, 2);
+
+  const banner = $("banner");
+  banner.className = "banner";
+  banner.hidden = true;
+  if (status === "error") {
+    banner.className = "banner error";
+    banner.textContent = state.message;
+    banner.hidden = false;
+  } else if (typeof state.models === "string" && state.models.startsWith("error")) {
+    banner.className = "banner error";
+    banner.textContent = "Models failed to load — " + state.models;
+    banner.hidden = false;
+  } else if (status === "running" && state.seconds_per_frame && state.analysis_fps < SLOW_FPS) {
+    const pace = state.seconds_per_frame >= 1 ? `one moment of the game every ${state.seconds_per_frame.toFixed(1)}s`
+      : `${state.analysis_fps.toFixed(1)} moments of the game per second`;
+    banner.textContent = `This computer (${state.device}) samples ${pace}. Ball control is estimated from those samples, but ` +
+      `passes, interceptions and speed need at least ${SLOW_FPS} analyzed frames per second — run this on a machine with an ` +
+      `NVIDIA GPU for those.`;
+    banner.hidden = false;
+  } else if (active && status !== "running") {
+    banner.textContent = state.message;
+    banner.hidden = false;
+  }
+
+  $("title").textContent = state.title && state.title !== state.source ? state.title : (state.source || "");
+
+  const stats = state.stats;
+  const hasFrames = stats && stats.frames_analyzed > 0;
+  if (hasFrames && feedSession !== state.output_dir) {
+    feedSession = state.output_dir;
+    $("feed").src = "/video_feed?session=" + encodeURIComponent(state.output_dir);
+    $("feed").style.display = "block";
+    $("placeholder").style.display = "none";
+  } else if (!hasFrames) {
+    $("placeholder").textContent = active ? (state.message || "Starting…") : "Paste a YouTube link and press Start.";
+  }
+
+  $("mClock").textContent = stats ? fmtTime(stats.video_time) : "–";
+  $("mSpeed").textContent = state.seconds_per_frame == null ? "–"
+    : state.analysis_fps >= 1 ? state.analysis_fps.toFixed(1) + " fps"
+    : state.seconds_per_frame.toFixed(1) + " s/frame";
+  $("mLag").textContent = stats ? state.lag_seconds.toFixed(1) + " s" : "–";
+  $("mFrames").textContent = stats ? stats.frames_analyzed.toLocaleString() : "–";
+
+  if (stats) {
+    const p1 = stats.ball_control_pct["1"], p2 = stats.ball_control_pct["2"];
+    const p0 = Math.max(0, 100 - p1 - p2);
+    $("bar1").style.width = p1 + "%";
+    $("bar0").style.width = p0 + "%";
+    $("bar2").style.width = p2 + "%";
+    $("pct1").textContent = p1.toFixed(1) + "%";
+    $("pct0").textContent = "no control " + p0.toFixed(1) + "%";
+    $("pct2").textContent = p2.toFixed(1) + "%";
+    $("pass1").textContent = stats.passes["1"];
+    $("pass2").textContent = stats.passes["2"];
+    $("int1").textContent = stats.interceptions["1"];
+    $("int2").textContent = stats.interceptions["2"];
+    $("dist1").textContent = stats.fast_mode ? "–" : Math.round(stats.team_distance_m["1"]);
+    $("dist2").textContent = stats.fast_mode ? "–" : Math.round(stats.team_distance_m["2"]);
+    const holder = stats.holder;
+    $("holder").innerHTML = "";
+    $("holder").append("Ball: ");
+    const b = document.createElement("b");
+    b.textContent = holder.player === -1 ? "loose / not seen" : `#${holder.player}` + (holder.team !== -1 ? ` (Team ${holder.team})` : "");
+    $("holder").append(b);
+    renderPlayers(stats.players, stats.fast_mode);
+  }
+  renderEvents(state);
+
+  if (state.output_dir) {
+    $("downloads").hidden = false;
+    $("outdir").textContent = state.output_dir;
+  }
+}
+
+function renderEvents(state) {
+  const list = $("events");
+  const events = state.events || [];
+  list.innerHTML = "";
+  if (!events.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "Passes and interceptions show up here.";
+    list.append(li);
+    return;
+  }
+  for (const e of events) {
+    const li = document.createElement("li");
+    const t = document.createElement("time");
+    t.textContent = fmtTime(e.video_time);
+    const body = document.createElement("span");
+    const tag = document.createElement("span");
+    tag.className = "tag t" + e.team;
+    tag.textContent = "Team " + e.team;
+    body.append(tag, `${e.type === "pass" ? "Pass" : "Interception"} #${e.from_player} → #${e.to_player}`);
+    li.append(t, body);
+    list.append(li);
+  }
+}
+
+function renderPlayers(players, fastMode) {
+  const body = $("players");
+  body.innerHTML = "";
+  if (!players.length) {
+    body.innerHTML = '<tr><td class="empty" colspan="3">No players tracked right now</td></tr>';
+    return;
+  }
+  for (const p of players) {
+    const tr = document.createElement("tr");
+    const id = document.createElement("td");
+    const chip = document.createElement("span");
+    chip.className = "chip" + (p.team === 1 || p.team === 2 ? " t" + p.team : "");
+    id.append(chip, "#" + p.id);
+    const dist = document.createElement("td");
+    dist.textContent = fastMode ? "–" : p.distance_m.toFixed(1) + " m";
+    const speed = document.createElement("td");
+    speed.textContent = fastMode ? "–" : p.speed_kmh.toFixed(1) + " km/h";
+    tr.append(id, dist, speed);
+    body.append(tr);
+  }
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/api/state");
+    render(await res.json());
+  } catch (e) {
+    $("statusText").textContent = "Server offline";
+    $("status").className = "pill error";
+  }
+  setTimeout(poll, 1000);
+}
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("start").disabled = true;
+  feedSession = null;
+  $("feed").style.display = "none";
+  $("feed").removeAttribute("src");
+  $("placeholder").style.display = "block";
+  $("placeholder").textContent = "Starting…";
+  const res = await fetch("/api/start", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({url: $("url").value, team_1: $("team1").value, team_2: $("team2").value}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || "Could not start");
+  }
+  $("start").disabled = false;
+});
+
+$("stop").addEventListener("click", () => fetch("/api/stop", {method: "POST"}));
+
+poll();
+</script>
+</body>
+</html>
