@@ -21,14 +21,15 @@ from team_assigner.team_assigner import pick_device
 from ball_aquisition import BallAquisitionDetector
 from tactical_view_converter import TacticalViewConverter
 from speed_and_distance_calculator import SpeedAndDistanceCalculator
+from speed_and_distance_calculator.speed_and_distance_calculator import (
+    PositionSmoother, MAX_PLAYER_SPEED_KMH, SPEED_WINDOW_SECONDS)
 from drawers import PlayerTracksDrawer, BallTracksDrawer, TacticalViewDrawer
 from utils import get_center_of_bbox, measure_distance
 from configs import PLAYER_DETECTOR_PATH, BALL_DETECTOR_PATH, COURT_KEYPOINT_DETECTOR_PATH
 
 # The batch pipeline's frame-based thresholds were tuned on 30fps video
 MIN_POSSESSION_SECONDS = 11 / 30         # BallAquisitionDetector.min_frames
-SPEED_WINDOW_SECONDS = 15 / 30           # SpeedAndDistanceCalculator.calculate_speed window
-MAX_PLAYER_SPEED_KMH = 40                # Faster than this is a tracking glitch, not a sprint
+NEW_STRETCH_SECONDS = 1.0                # a player missing longer than this starts again: the jump isn't counted
 MAX_TRACKING_GAP_SECONDS = 0.2           # ByteTrack matches by box overlap, which is gone after ~0.2s
 DETECTION_CONFIDENCE = 0.5               # ball and court keypoints; players use PlayerTracker's lower one
 
@@ -258,16 +259,21 @@ class LiveAnalyzer:
 
     def update_distances(self, tactical_positions, video_time):
         for player_id, position in tactical_positions.items():
-            previous = self.player_positions.get(player_id)
-            self.player_positions[player_id] = (video_time, position)
-            if previous is None:
+            # Distance is measured between smoothed positions: raw ones jitter, and every
+            # jitter would count as running (see SpeedAndDistanceCalculator)
+            smoother = self.player_positions.get(player_id)
+            if smoother is None or video_time - smoother.last_time > NEW_STRETCH_SECONDS:
+                smoother = PositionSmoother()
+                self.player_positions[player_id] = smoother
+            previous_time, previous_position = smoother.last_time, smoother.last_position
+            current_position = smoother.add(video_time, self.speed_and_distance_calculator.to_meters(position))
+            if previous_time is None:
                 continue
 
-            previous_time, previous_position = previous
             elapsed = video_time - previous_time
             if elapsed <= 0:
                 continue
-            meters = self.speed_and_distance_calculator.calculate_meter_distance(previous_position, position)
+            meters = measure_distance(current_position, previous_position)
             if meters / elapsed * 3.6 > MAX_PLAYER_SPEED_KMH:
                 continue
 

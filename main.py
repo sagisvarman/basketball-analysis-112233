@@ -116,7 +116,7 @@ def main():
         tactical_view_converter.actual_width_in_meters,
         tactical_view_converter.actual_height_in_meters
     )
-    player_distances_per_frame = speed_and_distance_calculator.calculate_distance(tactical_player_positions)
+    player_distances_per_frame = speed_and_distance_calculator.calculate_distance(tactical_player_positions, fps=fps)
     player_speed_per_frame = speed_and_distance_calculator.calculate_speed(player_distances_per_frame, fps=fps)
 
     # Draw output   
