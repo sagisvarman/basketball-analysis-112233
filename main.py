@@ -48,6 +48,7 @@ def main():
     # Read Video
     video_frames = read_video(args.input_video)
     fps = get_video_fps(args.input_video)
+    frame_width = video_frames[0].shape[1]
     use_stubs = not args.no_stubs
     
     ## Initialize Tracker
@@ -76,9 +77,9 @@ def main():
                                                                     )
 
     # Remove Wrong Ball Detections
-    ball_tracks = ball_tracker.remove_wrong_detections(ball_tracks)
+    ball_tracks = ball_tracker.remove_wrong_detections(ball_tracks, frame_width=frame_width, fps=fps)
     # Interpolate Ball Tracks
-    ball_tracks = ball_tracker.interpolate_ball_positions(ball_tracks)
+    ball_tracks = ball_tracker.interpolate_ball_positions(ball_tracks, fps=fps)
    
 
     # One ID per player for the whole video, and each player's team

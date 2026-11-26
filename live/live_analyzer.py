@@ -13,6 +13,7 @@ import supervision as sv
 
 from trackers import PlayerTracker, BallTracker, PlayerIdentityKeeper
 from trackers.player_tracker import DETECTION_CONFIDENCE as PLAYER_DETECTION_CONFIDENCE
+from trackers.ball_tracker import max_ball_pixels_per_second
 from court_keypoint_detector import CourtKeypointDetector
 from team_assigner import TeamAssigner
 from team_assigner.team_assigner import pick_device
@@ -24,7 +25,6 @@ from utils import get_center_of_bbox, measure_distance
 from configs import PLAYER_DETECTOR_PATH, BALL_DETECTOR_PATH, COURT_KEYPOINT_DETECTOR_PATH
 
 # The batch pipeline's frame-based thresholds were tuned on 30fps video
-BALL_MAX_PIXELS_PER_SECOND = 25 * 30     # BallTracker.remove_wrong_detections
 MIN_POSSESSION_SECONDS = 11 / 30         # BallAquisitionDetector.min_frames
 SPEED_WINDOW_SECONDS = 15 / 30           # SpeedAndDistanceCalculator.calculate_speed window
 MAX_PLAYER_SPEED_KMH = 40                # Faster than this is a tracking glitch, not a sprint
@@ -183,8 +183,8 @@ class LiveAnalyzer:
         # The ball can't have moved further than it could travel since the last good sighting
         if self.last_ball is not None:
             last_bbox, last_time = self.last_ball
-            max_distance = BALL_MAX_PIXELS_PER_SECOND * (video_time - last_time)
-            if measure_distance(last_bbox[:2], bbox[:2]) > max_distance:
+            max_distance = max_ball_pixels_per_second(result.orig_shape[1]) * (video_time - last_time)
+            if measure_distance(get_center_of_bbox(last_bbox), get_center_of_bbox(bbox)) > max_distance:
                 return None
         self.last_ball = (bbox, video_time)
         return bbox
