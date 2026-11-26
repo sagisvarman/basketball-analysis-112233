@@ -1,27 +1,42 @@
 from PIL import Image
 import cv2
+import torch
 from transformers import CLIPProcessor, CLIPModel
 
-import sys 
-sys.path.append('../')
-from utils import read_stub, save_stub
+# Part of the player box that shows the jersey: skips the head, the shorts and legs, and
+# the edges where arms, the floor and other players get in
+JERSEY_LEFT, JERSEY_RIGHT = 0.2, 0.8
+JERSEY_TOP, JERSEY_BOTTOM = 0.15, 0.55
+MIN_CROP_PIXELS = 4
+
+
+def pick_device():
+    if torch.cuda.is_available():
+        return 'cuda:0'
+    if torch.backends.mps.is_available():
+        return 'mps'
+    return 'cpu'
+
 
 class TeamAssigner:
     """
-    A class that assigns players to teams based on their jersey colors using visual analysis.
+    Looks at players' jerseys with a CLIP model.
 
-    The class uses a pre-trained vision model to classify players into teams based on their
-    appearance. It maintains a consistent team assignment for each player across frames.
+    For each player crop it gives two things from one model pass:
+    - how likely the jersey matches Team 1's description rather than Team 2's
+    - an appearance embedding, used to recognize the same player again later
+
+    Deciding a player's team over many frames is done by PlayerIdentityKeeper, which
+    adds up these per-frame votes for each player.
 
     Attributes:
-        team_colors (dict): Dictionary storing team color information.
-        player_team_dict (dict): Dictionary mapping player IDs to their team assignments.
         team_1_class_name (str): Description of Team 1's jersey appearance.
         team_2_class_name (str): Description of Team 2's jersey appearance.
     """
     def __init__(self,
                  team_1_class_name= "white shirt",
                  team_2_class_name= "dark blue shirt",
+                 device=None,
                  ):
         """
         Initialize the TeamAssigner with specified team jersey descriptions.
@@ -29,109 +44,100 @@ class TeamAssigner:
         Args:
             team_1_class_name (str): Description of Team 1's jersey appearance.
             team_2_class_name (str): Description of Team 2's jersey appearance.
+            device (str, optional): Torch device; picks CUDA, then MPS, then CPU by default.
         """
-        self.team_colors = {}
-        self.player_team_dict = {}        
-    
         self.team_1_class_name = team_1_class_name
         self.team_2_class_name = team_2_class_name
+        self.device = device or pick_device()
+        self.model = None
+        self.text_features = None
 
     def load_model(self):
         """
         Loads the pre-trained vision model for jersey color classification.
         """
-        self.model = CLIPModel.from_pretrained("patrickjohncyh/fashion-clip")
+        self.model = CLIPModel.from_pretrained("patrickjohncyh/fashion-clip").to(self.device).eval()
         self.processor = CLIPProcessor.from_pretrained("patrickjohncyh/fashion-clip")
+        self.set_team_names(self.team_1_class_name, self.team_2_class_name)
 
-    def get_player_color(self,frame,bbox):
+    def set_team_names(self, team_1_class_name, team_2_class_name):
         """
-        Analyzes the jersey color of a player within the given bounding box.
+        Set the jersey descriptions and prepare their text embeddings.
 
         Args:
-            frame (numpy.ndarray): The video frame containing the player.
-            bbox (tuple): Bounding box coordinates of the player.
-
-        Returns:
-            str: The classified jersey color/description.
+            team_1_class_name (str): Description of Team 1's jersey, e.g. "white shirt".
+            team_2_class_name (str): Description of Team 2's jersey, e.g. "red shirt".
         """
-        image = frame[int(bbox[1]):int(bbox[3]),int(bbox[0]):int(bbox[2])]
+        self.team_1_class_name = team_1_class_name
+        self.team_2_class_name = team_2_class_name
+        if self.model is None:
+            return
+        inputs = self.processor(text=[team_1_class_name, team_2_class_name],
+                                return_tensors="pt", padding=True).to(self.device)
+        with torch.no_grad():
+            text_features = self.model.get_text_features(**inputs)
+        self.text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-        # Convert to PIL Image
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb_image)
-        image = pil_image
-
-        classes = [self.team_1_class_name, self.team_2_class_name]
-
-        inputs = self.processor(text=classes, images=image, return_tensors="pt", padding=True)
-
-        outputs = self.model(**inputs)
-        logits_per_image = outputs.logits_per_image
-        probs = logits_per_image.softmax(dim=1) 
-
-
-        class_name=  classes[probs.argmax(dim=1)[0]]
-
-        return class_name
-
-    def get_player_team(self,frame,player_bbox,player_id):
+    @staticmethod
+    def get_jersey_crop(frame, bbox):
         """
-        Gets the team assignment for a player, using cached results if available.
+        Cut the jersey area out of a player's bounding box.
 
         Args:
-            frame (numpy.ndarray): The video frame containing the player.
-            player_bbox (tuple): Bounding box coordinates of the player.
-            player_id (int): Unique identifier for the player.
+            frame (numpy.ndarray): The video frame (BGR).
+            bbox (list): Player bounding box (x1, y1, x2, y2).
 
         Returns:
-            int: Team ID (1 or 2) assigned to the player.
+            PIL.Image or None: The jersey crop in RGB, or None if the box is too small.
         """
-        if player_id in self.player_team_dict:
-          return self.player_team_dict[player_id]
+        x1, y1, x2, y2 = bbox
+        width, height = x2 - x1, y2 - y1
+        frame_height, frame_width = frame.shape[:2]
+        left = max(0, int(x1 + JERSEY_LEFT * width))
+        right = min(frame_width, int(x1 + JERSEY_RIGHT * width))
+        top = max(0, int(y1 + JERSEY_TOP * height))
+        bottom = min(frame_height, int(y1 + JERSEY_BOTTOM * height))
+        if right - left < MIN_CROP_PIXELS or bottom - top < MIN_CROP_PIXELS:
+            return None
+        crop = frame[top:bottom, left:right]
+        return Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
 
-        player_color = self.get_player_color(frame,player_bbox)
-
-        team_id=2
-        if player_color==self.team_1_class_name:
-            team_id=1
-
-        self.player_team_dict[player_id] = team_id
-        return team_id
-
-    def get_player_teams_across_frames(self,video_frames,player_tracks,read_from_stub=False, stub_path=None):
+    def describe_players(self, frame, bboxes):
         """
-        Processes all video frames to assign teams to players, with optional caching.
+        Classify jerseys and compute appearance embeddings for several players at once.
 
         Args:
-            video_frames (list): List of video frames to process.
-            player_tracks (list): List of player tracking information for each frame.
-            read_from_stub (bool): Whether to attempt reading cached results.
-            stub_path (str): Path to the cache file.
+            frame (numpy.ndarray): The video frame containing the players.
+            bboxes (list): Player bounding boxes.
 
         Returns:
-            list: List of dictionaries mapping player IDs to team assignments for each frame.
+            tuple: (embeddings, team_1_probabilities), lists aligned with `bboxes`. An
+                embedding is a unit-length numpy vector; the probability is how likely the
+                jersey is Team 1's rather than Team 2's. Both are None for boxes too small
+                to look at.
         """
-        
-        player_assignment = read_stub(read_from_stub,stub_path)
-        if player_assignment is not None:
-            if len(player_assignment) == len(video_frames):
-                return player_assignment
+        embeddings = [None] * len(bboxes)
+        team_1_probabilities = [None] * len(bboxes)
 
-        self.load_model()
+        crops, crop_indexes = [], []
+        for index, bbox in enumerate(bboxes):
+            crop = self.get_jersey_crop(frame, bbox)
+            if crop is not None:
+                crops.append(crop)
+                crop_indexes.append(index)
+        if not crops:
+            return embeddings, team_1_probabilities
 
-        player_assignment=[]
-        for frame_num, player_track in enumerate(player_tracks):        
-            player_assignment.append({})
-            
-            if frame_num %50 ==0:
-                self.player_team_dict = {}
+        inputs = self.processor(images=crops, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            image_features = self.model.get_image_features(**inputs)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            logits = self.model.logit_scale.exp() * image_features @ self.text_features.T
+            probabilities = logits.softmax(dim=1)[:, 0]
 
-            for player_id, track in player_track.items():
-                team = self.get_player_team(video_frames[frame_num],   
-                                                    track['bbox'],
-                                                    player_id)
-                player_assignment[frame_num][player_id] = team
-        
-        save_stub(stub_path,player_assignment)
-
-        return player_assignment
+        image_features = image_features.float().cpu().numpy()
+        probabilities = probabilities.float().cpu().tolist()
+        for crop_number, index in enumerate(crop_indexes):
+            embeddings[index] = image_features[crop_number]
+            team_1_probabilities[index] = probabilities[crop_number]
+        return embeddings, team_1_probabilities

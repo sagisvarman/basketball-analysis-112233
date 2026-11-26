@@ -23,6 +23,9 @@ class SpeedAndDistanceCalculator():
     def calculate_distance(self,
                             tactical_player_positions
                             ):
+        # Players keep their ID after going missing; when they come back somewhere else,
+        # that jump isn't distance run in one frame, so it isn't counted
+        max_frame_gap = 5
         previous_players_position = {}
         output_distances =[]
 
@@ -32,11 +35,12 @@ class SpeedAndDistanceCalculator():
             for player_id, current_player_position in tactical_player_position_frame.items():
                 # Calculate distance
                 if player_id in previous_players_position:
-                    previous_position = previous_players_position[player_id]
-                    meter_distance = self.calculate_meter_distance(previous_position, current_player_position)
-                    output_distances[frame_number][player_id] = meter_distance
+                    previous_frame, previous_position = previous_players_position[player_id]
+                    if frame_number - previous_frame <= max_frame_gap:
+                        meter_distance = self.calculate_meter_distance(previous_position, current_player_position)
+                        output_distances[frame_number][player_id] = meter_distance
 
-                previous_players_position[player_id]=current_player_position
+                previous_players_position[player_id]=(frame_number, current_player_position)
         
         return output_distances
 

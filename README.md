@@ -112,8 +112,15 @@ Run the main entry point with your chosen video file:
 python main.py path_to_input_video.mp4 --output_video output_videos/output_result.avi
 ```
 
+- Describe each team's jersey so players are put in the right team, e.g. `--team1 "white shirt" --team2 "red shirt"` (defaults: white shirt vs dark blue shirt).
 - By default, intermediate “stubs” (pickled detection results) are used if found, allowing you to skip repeated detection/tracking.
-- Use the `--stub_path` flag to specify a custom stub folder, or disable stubs if you want to run everything fresh.
+- Use the `--stub_path` flag to specify a custom stub folder, or `--no_stubs` to run everything fresh.
+
+#### How players keep their ID and team
+
+ByteTrack follows players by box overlap from frame to frame, so on its own it gives a player a new ID whenever they're hidden behind someone or leave the picture. `trackers/player_identity.py` sits on top of it: a new track is matched to a player who went missing recently (same team, close to where they were last seen, similar-looking jersey from the CLIP embedding) and keeps that player's ID. Teams are decided from all the looks at a player's jersey (the torso only, not the floor or other players), not from a single frame, and a track that ByteTrack swapped onto a player of the other team is detected and corrected. The thresholds are constants at the top of that file and of `trackers/player_tracker.py`.
+
+If players are missed altogether on your own footage (a different camera angle, an amateur court), the player model needs examples like it: upload a few hundred frames from your videos to the Roboflow project, label them and fine-tune with `training_notebooks/basketball_player_detection_training.ipynb`.
 
 ### 2) Live YouTube Analysis (Web UI)
 
