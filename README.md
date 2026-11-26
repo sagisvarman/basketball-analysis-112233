@@ -113,7 +113,7 @@ python main.py path_to_input_video.mp4 --output_video output_videos/output_resul
 ```
 
 - Teams are found automatically: players are split into the two groups whose jerseys look most different, numbered Team 1 and Team 2. To choose which one is Team 1, describe the jerseys, e.g. `--team1 "white shirt" --team2 "red shirt"`.
-- By default, intermediate “stubs” (pickled detection results) are used if found, allowing you to skip repeated detection/tracking.
+- By default, intermediate “stubs” (pickled detection results) are used if found, allowing you to skip repeated detection/tracking. Each video gets its own stub folder (`stubs/<video name>/`).
 - Use the `--stub_path` flag to specify a custom stub folder, or `--no_stubs` to run everything fresh.
 
 #### How players keep their ID and team

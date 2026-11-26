@@ -50,6 +50,8 @@ def main():
     fps = get_video_fps(args.input_video)
     frame_width = video_frames[0].shape[1]
     use_stubs = not args.no_stubs
+    # Each video has its own stubs, so one video's results are never used for another
+    stub_dir = os.path.join(args.stub_path, os.path.splitext(os.path.basename(args.input_video))[0])
     
     ## Initialize Tracker
     player_tracker = PlayerTracker(PLAYER_DETECTOR_PATH)
@@ -62,18 +64,18 @@ def main():
     # ByteTrack IDs: a player who is lost and found again gets a new one
     raw_player_tracks = player_tracker.get_object_tracks(video_frames,
                                        read_from_stub=use_stubs,
-                                       stub_path=os.path.join(args.stub_path, 'player_track_stubs_v2.pkl'),
+                                       stub_path=os.path.join(stub_dir, 'player_track_stubs_v2.pkl'),
                                        fps=fps
                                       )
     
     ball_tracks = ball_tracker.get_object_tracks(video_frames,
                                                  read_from_stub=use_stubs,
-                                                 stub_path=os.path.join(args.stub_path, 'ball_track_stubs.pkl')
+                                                 stub_path=os.path.join(stub_dir, 'ball_track_stubs.pkl')
                                                 )
     ## Run KeyPoint Extractor
     court_keypoints_per_frame = court_keypoint_detector.get_court_keypoints(video_frames,
                                                                     read_from_stub=use_stubs,
-                                                                    stub_path=os.path.join(args.stub_path, 'court_key_points_stub.pkl')
+                                                                    stub_path=os.path.join(stub_dir, 'court_key_points_stub.pkl')
                                                                     )
 
     # Remove Wrong Ball Detections
@@ -89,7 +91,7 @@ def main():
                                                                             raw_player_tracks,
                                                                             fps=fps,
                                                                             read_from_stub=use_stubs,
-                                                                            stub_path=os.path.join(args.stub_path, 'player_identity_stub.pkl')
+                                                                            stub_path=os.path.join(stub_dir, 'player_identity_stub.pkl')
                                                                             )
 
     # Ball Acquisition
