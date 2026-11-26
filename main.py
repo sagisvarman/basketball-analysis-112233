@@ -1,7 +1,7 @@
 import os
 import argparse
-from utils import read_video, save_video
-from trackers import PlayerTracker, BallTracker
+from utils import read_video, save_video, get_video_fps
+from trackers import PlayerTracker, BallTracker, PlayerIdentityKeeper
 from team_assigner import TeamAssigner
 from court_keypoint_detector import CourtKeypointDetector
 from ball_aquisition import BallAquisitionDetector
@@ -33,6 +33,13 @@ def parse_args():
                         help='Path to output video file')
     parser.add_argument('--stub_path', type=str, default=STUBS_DEFAULT_PATH,
                         help='Path to stub directory')
+    parser.add_argument('--no_stubs', action='store_true',
+                        help='Ignore saved stubs and run every model again')
+    parser.add_argument('--team1', type=str, default=None,
+                        help='Optional. Team 1 jersey, e.g. "white shirt". Without --team1/--team2 '
+                             'the teams are found automatically and numbered 1 and 2')
+    parser.add_argument('--team2', type=str, default=None,
+                        help='Optional. Team 2 jersey, e.g. "red shirt"')
     return parser.parse_args()
 
 def main():
@@ -40,6 +47,11 @@ def main():
     
     # Read Video
     video_frames = read_video(args.input_video)
+    fps = get_video_fps(args.input_video)
+    frame_width = video_frames[0].shape[1]
+    use_stubs = not args.no_stubs
+    # Each video has its own stubs, so one video's results are never used for another
+    stub_dir = os.path.join(args.stub_path, os.path.splitext(os.path.basename(args.input_video))[0])
     
     ## Initialize Tracker
     player_tracker = PlayerTracker(PLAYER_DETECTOR_PATH)
@@ -49,43 +61,47 @@ def main():
     court_keypoint_detector = CourtKeypointDetector(COURT_KEYPOINT_DETECTOR_PATH)
 
     # Run Detectors
-    player_tracks = player_tracker.get_object_tracks(video_frames,
-                                       read_from_stub=True,
-                                       stub_path=os.path.join(args.stub_path, 'player_track_stubs.pkl')
+    # ByteTrack IDs: a player who is lost and found again gets a new one
+    raw_player_tracks = player_tracker.get_object_tracks(video_frames,
+                                       read_from_stub=use_stubs,
+                                       stub_path=os.path.join(stub_dir, 'player_track_stubs_v2.pkl'),
+                                       fps=fps
                                       )
     
     ball_tracks = ball_tracker.get_object_tracks(video_frames,
-                                                 read_from_stub=True,
-                                                 stub_path=os.path.join(args.stub_path, 'ball_track_stubs.pkl')
+                                                 read_from_stub=use_stubs,
+                                                 stub_path=os.path.join(stub_dir, 'ball_track_stubs.pkl')
                                                 )
     ## Run KeyPoint Extractor
     court_keypoints_per_frame = court_keypoint_detector.get_court_keypoints(video_frames,
-                                                                    read_from_stub=True,
-                                                                    stub_path=os.path.join(args.stub_path, 'court_key_points_stub.pkl')
+                                                                    read_from_stub=use_stubs,
+                                                                    stub_path=os.path.join(stub_dir, 'court_key_points_stub.pkl')
                                                                     )
 
     # Remove Wrong Ball Detections
-    ball_tracks = ball_tracker.remove_wrong_detections(ball_tracks)
+    ball_tracks = ball_tracker.remove_wrong_detections(ball_tracks, frame_width=frame_width, fps=fps)
     # Interpolate Ball Tracks
-    ball_tracks = ball_tracker.interpolate_ball_positions(ball_tracks)
+    ball_tracks = ball_tracker.interpolate_ball_positions(ball_tracks, fps=fps)
    
 
-    # Assign Player Teams
-    team_assigner = TeamAssigner()
-    player_assignment = team_assigner.get_player_teams_across_frames(video_frames,
-                                                                    player_tracks,
-                                                                    read_from_stub=True,
-                                                                    stub_path=os.path.join(args.stub_path, 'player_assignment_stub.pkl')
-                                                                    )
+    # One ID per player for the whole video, and each player's team
+    team_assigner = TeamAssigner(args.team1, args.team2)
+    player_identity_keeper = PlayerIdentityKeeper(team_assigner)
+    player_tracks, player_assignment = player_identity_keeper.process_video(video_frames,
+                                                                            raw_player_tracks,
+                                                                            fps=fps,
+                                                                            read_from_stub=use_stubs,
+                                                                            stub_path=os.path.join(stub_dir, 'player_identity_stub.pkl')
+                                                                            )
 
     # Ball Acquisition
-    ball_aquisition_detector = BallAquisitionDetector()
+    ball_aquisition_detector = BallAquisitionDetector(fps=fps, frame_width=frame_width)
     ball_aquisition = ball_aquisition_detector.detect_ball_possession(player_tracks,ball_tracks)
 
     # Detect Passes
     pass_and_interception_detector = PassAndInterceptionDetector()
-    passes = pass_and_interception_detector.detect_passes(ball_aquisition,player_assignment)
-    interceptions = pass_and_interception_detector.detect_interceptions(ball_aquisition,player_assignment)
+    passes = pass_and_interception_detector.detect_passes(ball_aquisition,player_assignment,fps=fps)
+    interceptions = pass_and_interception_detector.detect_interceptions(ball_aquisition,player_assignment,fps=fps)
 
     # Tactical View
     tactical_view_converter = TacticalViewConverter(
@@ -102,8 +118,8 @@ def main():
         tactical_view_converter.actual_width_in_meters,
         tactical_view_converter.actual_height_in_meters
     )
-    player_distances_per_frame = speed_and_distance_calculator.calculate_distance(tactical_player_positions)
-    player_speed_per_frame = speed_and_distance_calculator.calculate_speed(player_distances_per_frame)
+    player_distances_per_frame = speed_and_distance_calculator.calculate_distance(tactical_player_positions, fps=fps)
+    player_speed_per_frame = speed_and_distance_calculator.calculate_speed(player_distances_per_frame, fps=fps)
 
     # Draw output   
     # Initialize Drawers
@@ -158,7 +174,7 @@ def main():
                                                     )
 
     # Save video
-    save_video(output_video_frames, args.output_video)
+    save_video(output_video_frames, args.output_video, fps=fps)
 
 if __name__ == '__main__':
     main()

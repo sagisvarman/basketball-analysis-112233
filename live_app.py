@@ -19,7 +19,8 @@ from configs import LIVE_OUTPUT_PATH
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS = {"events.csv", "timeline.csv", "summary.json"}
-DEFAULT_TEAM_NAMES = {1: "white shirt", 2: "dark blue shirt"}
+# Empty: teams are found automatically from the jerseys
+DEFAULT_TEAM_NAMES = {1: "", 2: ""}
 
 app = Flask(__name__)
 

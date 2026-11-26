@@ -5,7 +5,7 @@ class PlayerTracksDrawer:
     A class responsible for drawing player tracks and ball possession indicators on video frames.
 
     Attributes:
-        default_player_team_id (int): Default team ID used when a player's team is not specified.
+        no_team_color (list): Color for players whose team isn't known yet.
         team_1_color (list): RGB color used to represent Team 1 players.
         team_2_color (list): RGB color used to represent Team 2 players.
     """
@@ -17,7 +17,7 @@ class PlayerTracksDrawer:
             team_1_color (list, optional): RGB color for Team 1. Defaults to [255, 245, 238].
             team_2_color (list, optional): RGB color for Team 2. Defaults to [128, 0, 0].
         """
-        self.default_player_team_id = 1
+        self.no_team_color = [128, 128, 128]
         self.team_1_color=team_1_color
         self.team_2_color=team_2_color
 
@@ -49,12 +49,14 @@ class PlayerTracksDrawer:
 
             # Draw Players
             for track_id, player in player_dict.items():
-                team_id = player_assignment_for_frame.get(track_id,self.default_player_team_id)
+                team_id = player_assignment_for_frame.get(track_id)
 
                 if team_id == 1:
                     color = self.team_1_color
-                else:
+                elif team_id == 2:
                     color = self.team_2_color
+                else:
+                    color = self.no_team_color  # team not known yet
 
                 frame = draw_ellipse(frame, player["bbox"],color, track_id)
 

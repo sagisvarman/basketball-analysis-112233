@@ -9,40 +9,33 @@ whenever the analyzer is slower than the stream.
 
 from collections import deque
 
-import cv2
 import supervision as sv
-import torch
-from PIL import Image
 
-from trackers import PlayerTracker, BallTracker
+from trackers import PlayerTracker, BallTracker, PlayerIdentityKeeper
+from trackers.player_tracker import DETECTION_CONFIDENCE as PLAYER_DETECTION_CONFIDENCE
+from trackers.ball_tracker import max_ball_pixels_per_second
+from pass_and_interception_detector.pass_and_interception_detector import MAX_LOOSE_BALL_SECONDS
 from court_keypoint_detector import CourtKeypointDetector
 from team_assigner import TeamAssigner
+from team_assigner.team_assigner import pick_device
 from ball_aquisition import BallAquisitionDetector
+from ball_aquisition.ball_aquisition_detector import MIN_POSSESSION_SECONDS, REFERENCE_FRAME_WIDTH
 from tactical_view_converter import TacticalViewConverter
 from speed_and_distance_calculator import SpeedAndDistanceCalculator
+from speed_and_distance_calculator.speed_and_distance_calculator import (
+    PositionSmoother, MAX_PLAYER_SPEED_KMH, SPEED_WINDOW_SECONDS)
 from drawers import PlayerTracksDrawer, BallTracksDrawer, TacticalViewDrawer
 from utils import get_center_of_bbox, measure_distance
 from configs import PLAYER_DETECTOR_PATH, BALL_DETECTOR_PATH, COURT_KEYPOINT_DETECTOR_PATH
 
 # The batch pipeline's frame-based thresholds were tuned on 30fps video
-BALL_MAX_PIXELS_PER_SECOND = 25 * 30     # BallTracker.remove_wrong_detections
-MIN_POSSESSION_SECONDS = 11 / 30         # BallAquisitionDetector.min_frames
-TEAM_REFRESH_SECONDS = 50 / 30           # TeamAssigner clears its cache every 50 frames
-SPEED_WINDOW_SECONDS = 15 / 30           # SpeedAndDistanceCalculator.calculate_speed window
-MAX_PLAYER_SPEED_KMH = 40                # Faster than this is a tracking glitch, not a sprint
+NEW_STRETCH_SECONDS = 1.0                # a player missing longer than this starts again: the jump isn't counted
 MAX_TRACKING_GAP_SECONDS = 0.2           # ByteTrack matches by box overlap, which is gone after ~0.2s
+DETECTION_CONFIDENCE = 0.5               # ball and court keypoints; players use PlayerTracker's lower one
 
 # BGR; the web UI uses the same colors for each team
 TEAM_1_COLOR = [11, 158, 245]
 TEAM_2_COLOR = [248, 189, 56]
-
-
-def pick_device():
-    if torch.cuda.is_available():
-        return 'cuda:0'
-    if torch.backends.mps.is_available():
-        return 'mps'
-    return 'cpu'
 
 
 class LiveAnalyzer:
@@ -64,9 +57,9 @@ class LiveAnalyzer:
             self.ball_tracker = BallTracker(BALL_DETECTOR_PATH)
             self.court_keypoint_detector = CourtKeypointDetector(COURT_KEYPOINT_DETECTOR_PATH)
 
-        self.team_assigner = TeamAssigner()
+        self.team_assigner = TeamAssigner(device=self.device)
         self.team_assigner.load_model()
-        self.team_assigner.model.to(self.device).eval()
+        self.player_identity_keeper = PlayerIdentityKeeper(self.team_assigner)
 
         self.ball_aquisition_detector = BallAquisitionDetector()
         self.tactical_view_converter = TacticalViewConverter(court_image_path="./images/basketball_court.png")
@@ -83,21 +76,22 @@ class LiveAnalyzer:
 
         self.reset()
 
-    def reset(self, team_1_class_name="white shirt", team_2_class_name="dark blue shirt"):
-        """Forget all tracking state and stats, and set the jersey descriptions for each team."""
-        self.player_tracker.tracker = sv.ByteTrack()
-        self.id_offset = 0
-        self.max_player_id = 0
-        self.team_assigner.team_1_class_name = team_1_class_name
-        self.team_assigner.team_2_class_name = team_2_class_name
-        self.team_assigner.player_team_dict = {}
-        self.last_team_refresh = None
+    def reset(self, team_1_class_name=None, team_2_class_name=None):
+        """
+        Forget all tracking state and stats, and set the jersey descriptions for each team.
+        Without descriptions the teams are found automatically once enough players are seen.
+        """
+        self.player_tracker.tracker = self.new_tracker()
+        self.team_assigner.set_team_names(team_1_class_name, team_2_class_name)
+        self.player_identity_keeper.reset()
 
         self.last_ball = None
+        self.frame_width = REFERENCE_FRAME_WIDTH
         self.streak_player = -1
         self.streak_start = None
         self.last_holder = -1
         self.last_holder_team = -1
+        self.last_holder_time = None
         self.holder = -1
         self.holder_team = -1
 
@@ -127,19 +121,21 @@ class LiveAnalyzer:
             tuple: (annotated_frame, events) where events is a list of pass/interception
                 dicts that happened on this frame.
         """
+        self.frame_width = frame.shape[1]
         # When frames are too far apart (slow hardware), players can't be followed from one
         # analyzed frame to the next: each frame is treated as an independent sample instead
         continuous = self.frames == 0 or video_time - self.video_time <= MAX_TRACKING_GAP_SECONDS
         if not continuous:
             self.start_new_tracker()
 
-        player_result = self.predict(self.player_tracker.model, frame)
+        player_result = self.predict(self.player_tracker.model, frame, conf=PLAYER_DETECTION_CONFIDENCE)
         ball_result = player_result if self.fast else self.predict(self.ball_tracker.model, frame)
 
-        players = self.track_players(player_result)
+        tracks = self.track_players(player_result)
+        players, assignment = self.player_identity_keeper.update(frame, video_time, tracks)
+        self.player_team.update(assignment)
         ball_bbox = self.detect_ball(ball_result, video_time)
         tactical_positions = {} if self.fast else self.get_tactical_positions(frame, players)
-        assignment = self.assign_teams(frame, players, video_time)
         events = self.update_possession(players, ball_bbox, assignment, video_time, continuous)
         self.update_distances(tactical_positions, video_time)
 
@@ -153,36 +149,38 @@ class LiveAnalyzer:
 
         return self.draw(frame, players, ball_bbox, tactical_positions, assignment), events
 
+    @staticmethod
+    def new_tracker():
+        # Every track gets an ID on its first frame: after a restart (below) the tracker
+        # may only ever see one frame
+        return PlayerTracker.new_tracker(minimum_consecutive_frames=1)
+
     def start_new_tracker(self):
         """
-        Restart ByteTrack, which only reports a new player once it matches them in the next
-        frame. Numbering continues from the previous tracker so player IDs stay unique.
+        Restart ByteTrack, which reports every player on its first frame. Its track IDs
+        start over, and PlayerIdentityKeeper matches the new tracks to the players it
+        remembers, so player IDs carry on.
         """
-        self.player_tracker.tracker = sv.ByteTrack()
-        self.id_offset = self.max_player_id
+        self.player_tracker.tracker = self.new_tracker()
+        self.player_identity_keeper.forget_tracks()
         self.streak_player = -1
         self.last_holder = -1
 
-    def predict(self, model, frame):
-        return model.predict(frame, conf=0.5, device=self.device, verbose=False)[0]
+    def predict(self, model, frame, conf=DETECTION_CONFIDENCE):
+        return model.predict(frame, conf=conf, device=self.device, verbose=False)[0]
 
     def track_players(self, result):
-        player_class_id = {name: class_id for class_id, name in result.names.items()}['Player']
-
-        detections = sv.Detections.from_ultralytics(result)
-        detections = detections[detections.class_id == player_class_id]
+        """ByteTrack tracks for this frame: {track_id: {"bbox": bbox}}."""
+        detections = PlayerTracker.get_player_detections(result)
         detections = self.player_tracker.tracker.update_with_detections(detections)
-
-        players = {int(track_id) + self.id_offset: {"bbox": bbox.tolist()}
-                   for bbox, track_id in zip(detections.xyxy, detections.tracker_id)}
-        self.max_player_id = max([self.max_player_id, *players])
-        return players
+        return {int(track_id): {"bbox": bbox.tolist()}
+                for bbox, track_id in zip(detections.xyxy, detections.tracker_id)}
 
     def detect_ball(self, result, video_time):
         ball_class_id = {name: class_id for class_id, name in result.names.items()}['Ball']
 
         detections = sv.Detections.from_ultralytics(result)
-        detections = detections[detections.class_id == ball_class_id]
+        detections = detections[(detections.class_id == ball_class_id) & (detections.confidence >= DETECTION_CONFIDENCE)]
         if len(detections) == 0:
             return None
         bbox = detections.xyxy[detections.confidence.argmax()].tolist()
@@ -190,8 +188,8 @@ class LiveAnalyzer:
         # The ball can't have moved further than it could travel since the last good sighting
         if self.last_ball is not None:
             last_bbox, last_time = self.last_ball
-            max_distance = BALL_MAX_PIXELS_PER_SECOND * (video_time - last_time)
-            if measure_distance(last_bbox[:2], bbox[:2]) > max_distance:
+            max_distance = max_ball_pixels_per_second(result.orig_shape[1]) * (video_time - last_time)
+            if measure_distance(get_center_of_bbox(last_bbox), get_center_of_bbox(bbox)) > max_distance:
                 return None
         self.last_ball = (bbox, video_time)
         return bbox
@@ -203,37 +201,6 @@ class LiveAnalyzer:
             return {}
         keypoints = self.tactical_view_converter.validate_keypoints([keypoints])
         return self.tactical_view_converter.transform_players_to_tactical_view(keypoints, [players])[0]
-
-    def assign_teams(self, frame, players, video_time):
-        assigner = self.team_assigner
-        if self.last_team_refresh is None or video_time - self.last_team_refresh >= TEAM_REFRESH_SECONDS:
-            assigner.player_team_dict = {}
-            self.last_team_refresh = video_time
-
-        # Classify every new player in one CLIP batch instead of one call per player
-        new_ids, crops = [], []
-        for player_id, track in players.items():
-            if player_id in assigner.player_team_dict:
-                continue
-            x1, y1, x2, y2 = (max(0, int(v)) for v in track["bbox"])
-            crop = frame[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
-            new_ids.append(player_id)
-            crops.append(Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)))
-
-        if crops:
-            classes = [assigner.team_1_class_name, assigner.team_2_class_name]
-            inputs = assigner.processor(text=classes, images=crops, return_tensors="pt", padding=True).to(self.device)
-            with torch.no_grad():
-                best_classes = assigner.model(**inputs).logits_per_image.argmax(dim=1).tolist()
-            for player_id, best_class in zip(new_ids, best_classes):
-                assigner.player_team_dict[player_id] = 1 if best_class == 0 else 2
-
-        assignment = {player_id: assigner.player_team_dict[player_id]
-                      for player_id in players if player_id in assigner.player_team_dict}
-        self.player_team.update(assignment)
-        return assignment
 
     def update_possession(self, players, ball_bbox, assignment, video_time, continuous=True):
         """
@@ -248,6 +215,7 @@ class LiveAnalyzer:
         if ball_bbox is None:
             return []
 
+        self.ball_aquisition_detector.set_video(frame_width=self.frame_width)
         candidate = self.ball_aquisition_detector.find_best_candidate_for_possession(
             get_center_of_bbox(ball_bbox), players, ball_bbox
         )
@@ -268,7 +236,9 @@ class LiveAnalyzer:
         self.holder_team = assignment.get(candidate, -1)
 
         events = []
-        if self.last_holder != -1 and self.holder != self.last_holder:
+        ball_was_loose_briefly = (self.last_holder_time is not None
+                                  and video_time - self.last_holder_time <= MAX_LOOSE_BALL_SECONDS)
+        if self.last_holder != -1 and self.holder != self.last_holder and ball_was_loose_briefly:
             if self.holder_team == self.last_holder_team and self.holder_team != -1:
                 self.passes[self.holder_team] += 1
                 events.append(self.make_event("pass", self.holder_team, video_time))
@@ -278,6 +248,7 @@ class LiveAnalyzer:
 
         self.last_holder = self.holder
         self.last_holder_team = self.holder_team
+        self.last_holder_time = video_time
         return events
 
     def make_event(self, event_type, team, video_time):
@@ -291,16 +262,21 @@ class LiveAnalyzer:
 
     def update_distances(self, tactical_positions, video_time):
         for player_id, position in tactical_positions.items():
-            previous = self.player_positions.get(player_id)
-            self.player_positions[player_id] = (video_time, position)
-            if previous is None:
+            # Distance is measured between smoothed positions: raw ones jitter, and every
+            # jitter would count as running (see SpeedAndDistanceCalculator)
+            smoother = self.player_positions.get(player_id)
+            if smoother is None or video_time - smoother.last_time > NEW_STRETCH_SECONDS:
+                smoother = PositionSmoother()
+                self.player_positions[player_id] = smoother
+            previous_time, previous_position = smoother.last_time, smoother.last_position
+            current_position = smoother.add(video_time, self.speed_and_distance_calculator.to_meters(position))
+            if previous_time is None:
                 continue
 
-            previous_time, previous_position = previous
             elapsed = video_time - previous_time
             if elapsed <= 0:
                 continue
-            meters = self.speed_and_distance_calculator.calculate_meter_distance(previous_position, position)
+            meters = measure_distance(current_position, previous_position)
             if meters / elapsed * 3.6 > MAX_PLAYER_SPEED_KMH:
                 continue
 

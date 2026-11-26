@@ -156,14 +156,14 @@
       <div class="teams">
         <div>
           <label for="team1"><span class="swatch" style="background:var(--team1)"></span>Team 1 jersey</label>
-          <input id="team1" type="text" value="white shirt">
+          <input id="team1" type="text" placeholder="Optional, e.g. white shirt">
         </div>
         <div>
           <label for="team2"><span class="swatch" style="background:var(--team2)"></span>Team 2 jersey</label>
-          <input id="team2" type="text" value="dark blue shirt">
+          <input id="team2" type="text" placeholder="Optional, e.g. red shirt">
         </div>
       </div>
-      <p class="hint">Describe each team's jersey in a few words (e.g. "red shirt", "yellow jersey"); players are sorted into teams by these descriptions. Live streams and normal videos both work.</p>
+      <p class="hint">Leave the jerseys empty and players are split into two teams automatically by how their jerseys look (this takes a few seconds once play starts). Describe the jerseys (e.g. "red shirt") only to choose which team is Team 1. Live streams and normal videos both work.</p>
     </form>
     <div id="banner" class="banner" hidden></div>
   </section>
@@ -241,19 +241,14 @@ function fmtTime(seconds) {
   return (h ? h + ":" : "") + mm + ":" + String(s).padStart(2, "0");
 }
 
-function teamName(state, team) {
-  const names = state.team_names || {};
-  return names[team] || ("Team " + team);
-}
-
 function render(state) {
   const status = state.status;
   const active = ACTIVE.has(status);
   // After a page reload, show what the current session is analyzing
   if (!formFilled && state.source) {
     $("url").value = state.source;
-    $("team1").value = teamName(state, 1);
-    $("team2").value = teamName(state, 2);
+    $("team1").value = (state.team_names || {})[1] || "";
+    $("team2").value = (state.team_names || {})[2] || "";
   }
   formFilled = true;
   const pill = $("status");
@@ -266,8 +261,9 @@ function render(state) {
   $("start").disabled = status === "stopping";
   $("stop").disabled = !active || status === "stopping";
 
-  $("name1").textContent = "Team 1 · " + teamName(state, 1);
-  $("name2").textContent = "Team 2 · " + teamName(state, 2);
+  const jersey = team => (state.team_names || {})[team];
+  $("name1").textContent = jersey(1) ? "Team 1 · " + jersey(1) : "Team 1";
+  $("name2").textContent = jersey(2) ? "Team 2 · " + jersey(2) : "Team 2";
 
   const banner = $("banner");
   banner.className = "banner";

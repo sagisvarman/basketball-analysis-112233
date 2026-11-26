@@ -112,8 +112,15 @@ Run the main entry point with your chosen video file:
 python main.py path_to_input_video.mp4 --output_video output_videos/output_result.avi
 ```
 
-- By default, intermediate “stubs” (pickled detection results) are used if found, allowing you to skip repeated detection/tracking.
-- Use the `--stub_path` flag to specify a custom stub folder, or disable stubs if you want to run everything fresh.
+- Teams are found automatically: players are split into the two groups whose jerseys look most different, numbered Team 1 and Team 2. To choose which one is Team 1, describe the jerseys, e.g. `--team1 "white shirt" --team2 "red shirt"`.
+- By default, intermediate “stubs” (pickled detection results) are used if found, allowing you to skip repeated detection/tracking. Each video gets its own stub folder (`stubs/<video name>/`).
+- Use the `--stub_path` flag to specify a custom stub folder, or `--no_stubs` to run everything fresh.
+
+#### How players keep their ID and team
+
+ByteTrack follows players by box overlap from frame to frame, so on its own it gives a player a new ID whenever they're hidden behind someone or leave the picture. `trackers/player_identity.py` sits on top of it: a new track is matched to a player who went missing recently (same team, close to where they were last seen, similar-looking jersey from the CLIP embedding) and keeps that player's ID. The two teams are found by grouping jersey embeddings (the torso only, not the floor or other players) into the two most different-looking groups; for a whole video this is done up front from jerseys sampled across all of it. Each player's team is then decided from all the looks at their jersey, not from a single frame, and a track that ByteTrack swapped onto a player of the other team is detected and corrected. The thresholds are constants at the top of that file and of `trackers/player_tracker.py`.
+
+If players are missed altogether on your own footage (a different camera angle, an amateur court), the player model needs examples like it: upload a few hundred frames from your videos to the Roboflow project, label them and fine-tune with `training_notebooks/basketball_player_detection_training.ipynb`.
 
 ### 2) Live YouTube Analysis (Web UI)
 
@@ -123,7 +130,7 @@ Analyze a YouTube live stream (or any YouTube video) while it plays:
 python live_app.py
 ```
 
-Open http://127.0.0.1:8000, paste a YouTube link, describe each team's jersey (e.g. "white shirt", "red shirt") and press **Start**. The page shows the annotated video with ball control, passes, interceptions, distance and speed updating live. Every run is recorded to `output_live/<date-time>/`:
+Open http://127.0.0.1:8000, paste a YouTube link and press **Start**. Teams are found automatically a few seconds in; optionally describe each team's jersey (e.g. "white shirt", "red shirt") to choose which is Team 1. The page shows the annotated video with ball control, passes, interceptions, distance and speed updating live. Every run is recorded to `output_live/<date-time>/`:
 
 - `events.csv` – every pass and interception with its time
 - `timeline.csv` – running totals after every analyzed frame
