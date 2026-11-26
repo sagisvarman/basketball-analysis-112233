@@ -74,8 +74,11 @@ class LiveAnalyzer:
 
         self.reset()
 
-    def reset(self, team_1_class_name="white shirt", team_2_class_name="dark blue shirt"):
-        """Forget all tracking state and stats, and set the jersey descriptions for each team."""
+    def reset(self, team_1_class_name=None, team_2_class_name=None):
+        """
+        Forget all tracking state and stats, and set the jersey descriptions for each team.
+        Without descriptions the teams are found automatically once enough players are seen.
+        """
         self.player_tracker.tracker = self.new_tracker()
         self.team_assigner.set_team_names(team_1_class_name, team_2_class_name)
         self.player_identity_keeper.reset()

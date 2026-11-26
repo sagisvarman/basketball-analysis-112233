@@ -36,7 +36,8 @@ class LiveSession:
 
     Args:
         source (str): YouTube link, other video link, or local file path.
-        team_names (dict): {1: "white shirt", 2: "dark blue shirt"} jersey descriptions.
+        team_names (dict): {1: "white shirt", 2: "dark blue shirt"} jersey descriptions;
+            empty strings to find the teams automatically.
         get_analyzer (callable): Returns the shared, already-loaded LiveAnalyzer (may block).
         output_root (str): Folder where this session's recording folder is created.
     """
@@ -150,7 +151,8 @@ class LiveSession:
 
             wall_clock = datetime.now().isoformat(timespec="seconds")
             for event in events:
-                event = {**event, "wall_clock": wall_clock, "team_name": self.team_names[event["team"]]}
+                event = {**event, "wall_clock": wall_clock,
+                         "team_name": self.team_names[event["team"]] or f"Team {event['team']}"}
                 events_writer.writerow(event)
             events_file.flush()
             timeline_writer.writerow({

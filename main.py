@@ -35,10 +35,11 @@ def parse_args():
                         help='Path to stub directory')
     parser.add_argument('--no_stubs', action='store_true',
                         help='Ignore saved stubs and run every model again')
-    parser.add_argument('--team1', type=str, default='white shirt',
-                        help='Team 1 jersey description, e.g. "white shirt"')
-    parser.add_argument('--team2', type=str, default='dark blue shirt',
-                        help='Team 2 jersey description, e.g. "red shirt"')
+    parser.add_argument('--team1', type=str, default=None,
+                        help='Optional. Team 1 jersey, e.g. "white shirt". Without --team1/--team2 '
+                             'the teams are found automatically and numbered 1 and 2')
+    parser.add_argument('--team2', type=str, default=None,
+                        help='Optional. Team 2 jersey, e.g. "red shirt"')
     return parser.parse_args()
 
 def main():

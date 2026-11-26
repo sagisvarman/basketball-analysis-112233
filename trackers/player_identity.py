@@ -9,11 +9,14 @@ went missing recently: same team, close enough to where they were last seen, and
 similar looking jersey (CLIP embedding). The best match keeps its old player ID.
 
 Teams are decided per player from all the looks at their jersey so far, instead of from
-a single frame, so a player doesn't flip team when someone walks in front of them.
+a single frame, so a player doesn't flip team when someone walks in front of them. The
+teams themselves are found by grouping players' jerseys into the two most different-looking
+groups, so nobody has to say which colors the teams wear.
 """
 
 import math
 import sys
+from collections import defaultdict
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -21,7 +24,7 @@ from scipy.optimize import linear_sum_assignment
 sys.path.append('../')
 from utils import get_foot_position, measure_distance, read_stub, save_stub
 
-STUB_VERSION = 1
+STUB_VERSION = 2
 
 # Matching a new track to a missing player
 MAX_MISSING_SECONDS = 20            # missing players are remembered this long
@@ -51,6 +54,14 @@ CONFIDENT_TEAM_MARGIN = 0.3         # Team 1 probability below 0.2 or above 0.8 
 MIN_VOTES_TO_BE_SURE = 2.0          # about two clear looks before a player's team counts as settled
 SWAP_LOOKS = 3                      # clear looks in a row at the other team's jersey
 
+# Finding the teams by grouping jerseys
+MIN_PLAYERS_TO_GROUP = 8            # players seen clearly before their jerseys are grouped into teams
+MIN_CLEAR_LOOKS_TO_GROUP = 2
+REGROUP_EVERY_SECONDS = 30          # frame by frame (live): group again as more players are seen
+GROUP_PLAYERS_SEEN_WITHIN_SECONDS = 120
+MAX_GROUPING_WEIGHT = 10            # so players on screen the whole time don't drown out the rest
+SAMPLE_CROPS_FOR_GROUPING = 600     # whole videos: jerseys looked at up front to find the teams
+
 
 class PlayerProfile:
     """What is remembered about one player: where and when they were last seen, their look and team votes."""
@@ -61,6 +72,7 @@ class PlayerProfile:
         self.last_look = -math.inf
         self.embedding = None
         self.team_votes = np.zeros(2)
+        self.clear_looks = 0
         self.opposite_team_looks = 0
         # Where and when a look last confirmed this player's team. If their track turns out
         # to have swapped onto someone else, this is where the player really was
@@ -92,6 +104,8 @@ class PlayerProfile:
             clear (bool): False when another player covers part of this one, so the crop
                 may show the wrong jersey.
         """
+        if embedding is not None and clear:
+            self.clear_looks += 1
         if embedding is not None and (clear or self.embedding is None):
             if self.embedding is None:
                 self.embedding = embedding
@@ -126,6 +140,8 @@ class PlayerIdentityKeeper:
         self.track_to_player = {}
         self.swapped_off = set()
         self.next_player_id = 1
+        self.learn_teams = True
+        self.last_team_grouping = -math.inf
 
     def forget_tracks(self):
         """
@@ -179,7 +195,6 @@ class PlayerIdentityKeeper:
 
         self.match_new_tracks(new_tracks, tracks, looks, clear, video_time, known)
 
-        players, teams = {}, {}
         for track_id, player_id in known.items():
             profile = self.players[player_id]
             bbox = tracks[track_id]["bbox"]
@@ -195,11 +210,78 @@ class PlayerIdentityKeeper:
                         profile.trusted_bbox, profile.trusted_time = bbox, video_time
                 profile.last_look = video_time
 
-            players[player_id] = {"bbox": bbox}
-            team = profile.team()
+        self.maybe_group_teams(video_time)
+
+        players, teams = {}, {}
+        for track_id, player_id in known.items():
+            players[player_id] = {"bbox": tracks[track_id]["bbox"]}
+            team = self.players[player_id].team()
             if team is not None:
                 teams[player_id] = team
         return players, teams
+
+    def maybe_group_teams(self, video_time):
+        """
+        Find (or refresh) the teams from the jerseys of the players seen so far, once
+        enough of them have been seen clearly.
+        """
+        assigner = self.team_assigner
+        if not self.learn_teams:
+            return
+        if assigner.grouped and video_time - self.last_team_grouping < REGROUP_EVERY_SECONDS:
+            return
+        seen = [profile for profile in self.players.values()
+                if profile.embedding is not None and profile.clear_looks >= MIN_CLEAR_LOOKS_TO_GROUP
+                and video_time - profile.last_seen <= GROUP_PLAYERS_SEEN_WITHIN_SECONDS]
+        if len(seen) < MIN_PLAYERS_TO_GROUP:
+            return
+        self.last_team_grouping = video_time
+        if not assigner.fit_teams([profile.embedding for profile in seen],
+                                  [min(profile.clear_looks, MAX_GROUPING_WEIGHT) for profile in seen]):
+            return
+
+        # Players seen before the teams were known get a first vote from their remembered look
+        unvoted = [profile for profile in self.players.values()
+                   if profile.embedding is not None and profile.team_votes.sum() == 0]
+        if unvoted:
+            probabilities = assigner.team_1_probabilities(np.stack([profile.embedding for profile in unvoted]))
+            for profile, probability in zip(unvoted, probabilities):
+                profile.add_look(None, probability, clear=True)
+
+    def group_teams_from_video(self, video_frames, tracks, fps):
+        """
+        Find the teams before going through a whole video, from jerseys sampled across all
+        of it, so players have their team from the first frame.
+
+        Returns:
+            bool: True if the teams were found.
+        """
+        total_boxes = sum(len(frame_tracks) for frame_tracks in tracks)
+        if total_boxes == 0:
+            return False
+        step = max(1, int(round(fps * LOOK_EVERY_SECONDS)), math.ceil(total_boxes / SAMPLE_CROPS_FOR_GROUPING))
+
+        samples = defaultdict(list)
+        for frame_num in range(0, len(video_frames), step):
+            frame_tracks = tracks[frame_num]
+            clear_tracks = [track_id for track_id in frame_tracks if self.is_clear(track_id, frame_tracks)]
+            if not clear_tracks:
+                continue
+            embeddings, _ = self.team_assigner.describe_players(
+                video_frames[frame_num], [frame_tracks[track_id]["bbox"] for track_id in clear_tracks])
+            for track_id, embedding in zip(clear_tracks, embeddings):
+                if embedding is not None:
+                    samples[track_id].append(embedding)
+
+        if len(samples) >= MIN_PLAYERS_TO_GROUP:
+            # One averaged look per track is steadier than single crops
+            embeddings = [np.mean(looks, axis=0) for looks in samples.values()]
+            embeddings = [embedding / np.linalg.norm(embedding) for embedding in embeddings]
+            weights = [min(len(looks), MAX_GROUPING_WEIGHT) for looks in samples.values()]
+        else:
+            embeddings = [embedding for looks in samples.values() for embedding in looks]
+            weights = None
+        return self.team_assigner.fit_teams(embeddings, weights)
 
     def find_swapped_tracks(self, known, looks, clear):
         """
@@ -349,6 +431,8 @@ class PlayerIdentityKeeper:
         if self.team_assigner.model is None:
             self.team_assigner.load_model()
         self.reset()
+        # Teams found from the whole video don't need regrouping along the way
+        self.learn_teams = not self.group_teams_from_video(video_frames, tracks, fps)
 
         player_tracks, player_assignment = [], []
         for frame_num, (frame, frame_tracks) in enumerate(zip(video_frames, tracks)):
