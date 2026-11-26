@@ -14,6 +14,7 @@ import supervision as sv
 from trackers import PlayerTracker, BallTracker, PlayerIdentityKeeper
 from trackers.player_tracker import DETECTION_CONFIDENCE as PLAYER_DETECTION_CONFIDENCE
 from trackers.ball_tracker import max_ball_pixels_per_second
+from pass_and_interception_detector.pass_and_interception_detector import MAX_LOOSE_BALL_SECONDS
 from court_keypoint_detector import CourtKeypointDetector
 from team_assigner import TeamAssigner
 from team_assigner.team_assigner import pick_device
@@ -88,6 +89,7 @@ class LiveAnalyzer:
         self.streak_start = None
         self.last_holder = -1
         self.last_holder_team = -1
+        self.last_holder_time = None
         self.holder = -1
         self.holder_team = -1
 
@@ -230,7 +232,9 @@ class LiveAnalyzer:
         self.holder_team = assignment.get(candidate, -1)
 
         events = []
-        if self.last_holder != -1 and self.holder != self.last_holder:
+        ball_was_loose_briefly = (self.last_holder_time is not None
+                                  and video_time - self.last_holder_time <= MAX_LOOSE_BALL_SECONDS)
+        if self.last_holder != -1 and self.holder != self.last_holder and ball_was_loose_briefly:
             if self.holder_team == self.last_holder_team and self.holder_team != -1:
                 self.passes[self.holder_team] += 1
                 events.append(self.make_event("pass", self.holder_team, video_time))
@@ -240,6 +244,7 @@ class LiveAnalyzer:
 
         self.last_holder = self.holder
         self.last_holder_team = self.holder_team
+        self.last_holder_time = video_time
         return events
 
     def make_event(self, event_type, team, video_time):

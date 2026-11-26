@@ -98,8 +98,8 @@ def main():
 
     # Detect Passes
     pass_and_interception_detector = PassAndInterceptionDetector()
-    passes = pass_and_interception_detector.detect_passes(ball_aquisition,player_assignment)
-    interceptions = pass_and_interception_detector.detect_interceptions(ball_aquisition,player_assignment)
+    passes = pass_and_interception_detector.detect_passes(ball_aquisition,player_assignment,fps=fps)
+    interceptions = pass_and_interception_detector.detect_interceptions(ball_aquisition,player_assignment,fps=fps)
 
     # Tactical View
     tactical_view_converter = TacticalViewConverter(
