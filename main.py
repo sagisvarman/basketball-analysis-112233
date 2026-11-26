@@ -93,7 +93,7 @@ def main():
                                                                             )
 
     # Ball Acquisition
-    ball_aquisition_detector = BallAquisitionDetector()
+    ball_aquisition_detector = BallAquisitionDetector(fps=fps, frame_width=frame_width)
     ball_aquisition = ball_aquisition_detector.detect_ball_possession(player_tracks,ball_tracks)
 
     # Detect Passes

@@ -2,6 +2,12 @@ import sys
 sys.path.append('../')
 from utils.bbox_utils import measure_distance, get_center_of_bbox
 
+# Tuned on the 1280x720, 30fps sample videos; scaled to each video's width and frame rate
+REFERENCE_FRAME_WIDTH = 1280
+POSSESSION_DISTANCE_PIXELS = 50     # at the reference width
+MIN_POSSESSION_SECONDS = 11 / 30
+
+
 class BallAquisitionDetector:
     """
     Detects ball acquisition by players in a basketball game.
@@ -12,9 +18,13 @@ class BallAquisitionDetector:
     box with containment ratios of the ball within a player's bounding box.
     """
 
-    def __init__(self):
+    def __init__(self, fps=30, frame_width=REFERENCE_FRAME_WIDTH):
         """
         Initialize the BallAquisitionDetector with default thresholds.
+
+        Args:
+            fps (float): Frame rate of the video.
+            frame_width (int): Width of the video frames in pixels.
 
         Attributes:
             possession_threshold (int): Maximum distance (in pixels) at which
@@ -24,9 +34,13 @@ class BallAquisitionDetector:
             containment_threshold (float): Containment ratio above which a player
                 is considered to hold the ball without requiring distance checking.
         """
-        self.possession_threshold = 50
-        self.min_frames = 11
         self.containment_threshold = 0.8
+        self.set_video(fps, frame_width)
+
+    def set_video(self, fps=30, frame_width=REFERENCE_FRAME_WIDTH):
+        """Scale the pixel and frame thresholds to a video's width and frame rate."""
+        self.possession_threshold = POSSESSION_DISTANCE_PIXELS * frame_width / REFERENCE_FRAME_WIDTH
+        self.min_frames = max(1, int(round(MIN_POSSESSION_SECONDS * fps)))
         
     def get_key_basketball_player_assignment_points(self, player_bbox,ball_center):
         """

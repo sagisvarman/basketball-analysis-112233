@@ -19,6 +19,7 @@ from court_keypoint_detector import CourtKeypointDetector
 from team_assigner import TeamAssigner
 from team_assigner.team_assigner import pick_device
 from ball_aquisition import BallAquisitionDetector
+from ball_aquisition.ball_aquisition_detector import MIN_POSSESSION_SECONDS, REFERENCE_FRAME_WIDTH
 from tactical_view_converter import TacticalViewConverter
 from speed_and_distance_calculator import SpeedAndDistanceCalculator
 from speed_and_distance_calculator.speed_and_distance_calculator import (
@@ -28,7 +29,6 @@ from utils import get_center_of_bbox, measure_distance
 from configs import PLAYER_DETECTOR_PATH, BALL_DETECTOR_PATH, COURT_KEYPOINT_DETECTOR_PATH
 
 # The batch pipeline's frame-based thresholds were tuned on 30fps video
-MIN_POSSESSION_SECONDS = 11 / 30         # BallAquisitionDetector.min_frames
 NEW_STRETCH_SECONDS = 1.0                # a player missing longer than this starts again: the jump isn't counted
 MAX_TRACKING_GAP_SECONDS = 0.2           # ByteTrack matches by box overlap, which is gone after ~0.2s
 DETECTION_CONFIDENCE = 0.5               # ball and court keypoints; players use PlayerTracker's lower one
@@ -86,6 +86,7 @@ class LiveAnalyzer:
         self.player_identity_keeper.reset()
 
         self.last_ball = None
+        self.frame_width = REFERENCE_FRAME_WIDTH
         self.streak_player = -1
         self.streak_start = None
         self.last_holder = -1
@@ -120,6 +121,7 @@ class LiveAnalyzer:
             tuple: (annotated_frame, events) where events is a list of pass/interception
                 dicts that happened on this frame.
         """
+        self.frame_width = frame.shape[1]
         # When frames are too far apart (slow hardware), players can't be followed from one
         # analyzed frame to the next: each frame is treated as an independent sample instead
         continuous = self.frames == 0 or video_time - self.video_time <= MAX_TRACKING_GAP_SECONDS
@@ -213,6 +215,7 @@ class LiveAnalyzer:
         if ball_bbox is None:
             return []
 
+        self.ball_aquisition_detector.set_video(frame_width=self.frame_width)
         candidate = self.ball_aquisition_detector.find_best_candidate_for_possession(
             get_center_of_bbox(ball_bbox), players, ball_bbox
         )
